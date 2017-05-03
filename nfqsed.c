@@ -289,29 +289,57 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 				uint8_t *comment = NULL, *comment_end= NULL;
 				
 				printf("need_len=%d\n", need_len);
+				// Find 2 "<!--" comment line in html, if both together length is less than desired, overlook this packet.
 				if ((comment =  find_str("<!--", tcp_payload, len-ip_size-tcp_size)) != NULL){
 					if ((comment_end = find_str("-->", comment, len-ip_size-tcp_size - (comment- tcp_payload))) != NULL){
 						temp_len = comment_end - comment;
+						printf("temp_len=%d\n", temp_len);
 						if (temp_len > need_len)
 						{
-							temp_len = temp_len - need_len;
-							//uint8_t *empty = malloc(temp_len +1);
-							//memset(empty, ' ', temp_len);
-							//empty[temp_len] = '\0';
-							//memcpy(comment+strlen("<!--"), empty, temp_len );
-							//free(empty);
-							//memmove(comment+strlen("<!--")+temp_len, comment_end, len-ip_size-tcp_size - (comment_end- tcp_payload) );
+							int rest_len = temp_len - need_len;
 							printf("have remove length that should be inserted\n");
-							memmove(comment_end-temp_len, pos_end, comment_end-temp_len - pos_end);
+							memmove(pos_end+temp_len-rest_len, pos_end, comment + temp_len - rest_len - pos_end);
 							printf("move buffer to end\n");
 							memcpy(pos, rule->val2, rule->length);
 							printf("Done");
+							//break;
 						}
 						else
 						{
 							//Remove total.
-							printf("Should remove all\n");
+							printf("Should remove first all\n");
+							uint8_t *tmp = NULL, *tmp_end = NULL;
+							int tmp_len = 0;
+							if ((tmp = find_str("<!--", comment_end, len-ip_size-tcp_size)) != NULL){
+								if ((tmp_end = find_str("-->", tmp, len-ip_size-tcp_size - (tmp- tcp_payload))) != NULL){
+									tmp_len = tmp_end - tmp;
+									printf("tmp_len=%d\n", tmp_len);
+									if (tmp_len+temp_len >= need_len){
+										int rest_len = tmp_len - (need_len - temp_len);
+										//Remove first <!-- -->
+										temp_len += strlen("-->");
+										memmove(pos_end+temp_len, pos_end, comment - pos_end);
+										printf("Remove first OK\n");
+										//Remove second with desired length
+										memmove(pos_end+temp_len+tmp_len-rest_len, pos_end+temp_len, tmp + (tmp_len-rest_len) - (pos_end+ temp_len));
+										printf("Remove second end\n");
+										memcpy(pos, rule->val2, rule->length);
+									} else {
+										printf("Do not modify anything\n");
+									}
+								}
+								else
+								{
+									printf("Not find end of comment label\n");
+									//break;
+								}
+							}
 						}
+					}
+					else
+					{
+						printf("Not find end of comment label\n");
+						//break;
 					}
 				}
 			}

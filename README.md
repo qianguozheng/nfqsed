@@ -29,3 +29,17 @@ TODO
  * binary rules
 
 [1]: http://xakcop.com/post/mitm-stb/ 
+
+---
+
+Richard Modify it.
+---
+iptables -t filter -A INPUT -p tcp --sport 80 -j QUEUE
+
+# Inject javascript into html before title label.
+sudo ./nfqsed -f rule.txt
+
+
+# Conclusion
+
+Not beautiful, and not use in production.
